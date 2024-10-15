@@ -83,6 +83,11 @@ contract InvestmentManager is Ownable, Pausable, ReentrancyGuard {
 
         SmartAccount(smartAccount).burnTokens(address(rwaToken), tokens);
 
+        // If all tokens are withdrawn, remove the smart account
+        if (rwaToken.balanceOf(smartAccount) == 0) {
+            accountFactory.removeAccount(investor);
+        }
+
         emit WithdrawalInitiated(investor, fiatAmount, tokens);
     }
 

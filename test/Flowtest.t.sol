@@ -15,12 +15,14 @@ contract InvestmentFlowTest is Test {
     address public admin;
     address public investor1;
     address public investor2;
+    address public investor3;
     uint256 public constant LOCK_PERIOD = 30 days;
 
     function setUp() public {
         admin = address(this);
         investor1 = address(0x1);
         investor2 = address(0x2);
+        investor3 = address(0x3);
 
         // Deploy contracts
         rwaToken = new RWAToken();
@@ -43,77 +45,143 @@ contract InvestmentFlowTest is Test {
         // Fund investors with ETH for gas
         vm.deal(investor1, 100 ether);
         vm.deal(investor2, 100 ether);
+        vm.deal(investor3, 100 ether);
     }
 
-    function testInvestmentFlow() public {
-        // Simulate bank payment confirmation and investment
-        uint256 investmentAmount1 = 1000; // $1000
-        uint256 investmentAmount2 = 2000; // $2000
+    function testCompleteInvestmentFlow() public {
+        // 1. Initial investment
+        uint256 investmentAmount = 1000;
+        investmentManager.invest(investor1, investmentAmount);
 
-        // Invest for investor1
-        investmentManager.invest(investor1, investmentAmount1);
-
-        // Check SmartAccount creation and token balance
-        address smartAccount1 = accountFactory.getAccount(investor1);
-        assertNotEq(smartAccount1, address(0), "SmartAccount not created");
+        address smartAccount = accountFactory.getAccount(investor1);
         assertEq(
-            rwaToken.balanceOf(smartAccount1),
-            investmentAmount1,
-            "Incorrect token balance"
+            rwaToken.balanceOf(smartAccount),
+            investmentAmount,
+            "Incorrect initial investment balance"
         );
 
-        // Invest for investor2
-        investmentManager.invest(investor2, investmentAmount2);
-
-        // Check SmartAccount creation and token balance
-        address smartAccount2 = accountFactory.getAccount(investor2);
-        assertNotEq(smartAccount2, address(0), "SmartAccount not created");
-        assertEq(
-            rwaToken.balanceOf(smartAccount2),
-            investmentAmount2,
-            "Incorrect token balance"
-        );
-
-        // Try to withdraw before lock period (should fail)
+        // 2. Try to withdraw before lock period (should fail)
         vm.expectRevert("Lock period not over");
-        investmentManager.initiateWithdrawal(investor1, investmentAmount1);
+        investmentManager.initiateWithdrawal(investor1, investmentAmount);
 
-        // Fast forward time to after lock period
-        vm.warp(block.timestamp + LOCK_PERIOD + 1 days);
+        // 3. Fast forward time to just before lock period ends
+        vm.warp(block.timestamp + LOCK_PERIOD - 1);
+        vm.expectRevert("Lock period not over");
+        investmentManager.initiateWithdrawal(investor1, investmentAmount);
 
-        // Initiate withdrawal for investor1
-        investmentManager.initiateWithdrawal(investor1, investmentAmount1);
+        // 4. Fast forward time to after lock period
+        vm.warp(block.timestamp + 2);
 
-        // Check token balance after withdrawal
+        // 5. Full withdrawal
+        investmentManager.initiateWithdrawal(investor1, investmentAmount);
         assertEq(
-            rwaToken.balanceOf(smartAccount1),
+            rwaToken.balanceOf(smartAccount),
             0,
-            "Tokens not burned after withdrawal"
+            "Tokens not fully withdrawn"
         );
 
-        // Simulate profit calculation (50% profit)
-        uint256 profitPercentage = 50;
-        uint256 totalReturn = investmentAmount1 +
-            ((investmentAmount1 * profitPercentage) / 100);
+        // 6. Try to withdraw again (should fail)
+        vm.expectRevert("No investment found");
+        investmentManager.initiateWithdrawal(investor1, investmentAmount);
+    }
 
-        // Log the return amount (in a real scenario, this would trigger a manual payout)
-        emit log_named_uint("Return amount for investor1", totalReturn);
+    function testMultipleInvestorsAndPartialWithdrawals() public {
+        // 1. Multiple investors invest
+        investmentManager.invest(investor1, 1000);
+        investmentManager.invest(investor2, 2000);
+        investmentManager.invest(investor3, 3000);
 
-        // Test pausing functionality
+        // 2. Fast forward time
+        vm.warp(block.timestamp + LOCK_PERIOD + 1);
+
+        // 3. Partial withdrawals
+        investmentManager.initiateWithdrawal(investor1, 500);
+        investmentManager.initiateWithdrawal(investor2, 1000);
+        investmentManager.initiateWithdrawal(investor3, 1500);
+
+        // 4. Check remaining balances
+        assertEq(
+            rwaToken.balanceOf(accountFactory.getAccount(investor1)),
+            500,
+            "Incorrect balance after partial withdrawal"
+        );
+        assertEq(
+            rwaToken.balanceOf(accountFactory.getAccount(investor2)),
+            1000,
+            "Incorrect balance after partial withdrawal"
+        );
+        assertEq(
+            rwaToken.balanceOf(accountFactory.getAccount(investor3)),
+            1500,
+            "Incorrect balance after partial withdrawal"
+        );
+    }
+
+    function testInvestmentLimits() public {
+        // 1. Try to invest 0 (should fail)
+        vm.expectRevert("Investment amount must be greater than 0");
+        investmentManager.invest(investor1, 0);
+
+        // 2. Invest maximum uint256 value (edge case)
+        uint256 maxInvestment = type(uint256).max;
+        investmentManager.invest(investor1, maxInvestment);
+        address smartAccount = accountFactory.getAccount(investor1);
+        assertEq(
+            rwaToken.balanceOf(smartAccount),
+            maxInvestment,
+            "Incorrect balance for max investment"
+        );
+    }
+
+    function testPauseAndUnpause() public {
+        // 1. Pause the contract
         investmentManager.pause();
 
-        vm.expectRevert("Pausable: paused");
-        investmentManager.invest(investor2, 1000);
+        // 2. Try to invest while paused (should fail)
+        vm.expectRevert();
+        investmentManager.invest(investor1, 1000);
 
+        // 3. Try to withdraw while paused (should fail)
+        vm.expectRevert();
+        investmentManager.initiateWithdrawal(investor1, 500);
+
+        // 4. Unpause the contract
         investmentManager.unpause();
 
-        // Test changing lock period
+        // 5. Invest after unpausing (should succeed)
+        investmentManager.invest(investor1, 1000);
+        address smartAccount = accountFactory.getAccount(investor1);
+        assertEq(
+            rwaToken.balanceOf(smartAccount),
+            1000,
+            "Investment failed after unpausing"
+        );
+    }
+
+    function testChangeLockPeriod() public {
+        // 1. Change lock period
         uint256 newLockPeriod = 60 days;
         investmentManager.setLockPeriod(newLockPeriod);
         assertEq(
             investmentManager.lockPeriod(),
             newLockPeriod,
             "Lock period not updated"
+        );
+
+        // 2. Invest and try to withdraw before new lock period
+        investmentManager.invest(investor1, 1000);
+        vm.warp(block.timestamp + 45 days);
+        vm.expectRevert("Lock period not over");
+        investmentManager.initiateWithdrawal(investor1, 1000);
+
+        // 3. Withdraw after new lock period
+        vm.warp(block.timestamp + 16 days);
+        investmentManager.initiateWithdrawal(investor1, 1000);
+        address smartAccount = accountFactory.getAccount(investor1);
+        assertEq(
+            rwaToken.balanceOf(smartAccount),
+            0,
+            "Withdrawal failed after new lock period"
         );
     }
 
@@ -127,47 +195,132 @@ contract InvestmentFlowTest is Test {
         investmentManager.initiateWithdrawal(investor1, 1000);
     }
 
-    function testMultipleInvestments() public {
-        uint256 initialInvestment = 1000;
-        uint256 additionalInvestment = 500;
-
-        // Initial investment
-        investmentManager.invest(investor1, initialInvestment);
-
-        // Additional investment
-        investmentManager.invest(investor1, additionalInvestment);
+    function testMultipleInvestmentsAndWithdrawals() public {
+        // 1. Multiple investments for the same investor
+        investmentManager.invest(investor1, 1000);
+        investmentManager.invest(investor1, 500);
+        investmentManager.invest(investor1, 750);
 
         address smartAccount = accountFactory.getAccount(investor1);
         assertEq(
             rwaToken.balanceOf(smartAccount),
-            initialInvestment + additionalInvestment,
-            "Incorrect total investment"
+            2250,
+            "Incorrect total investment balance"
+        );
+
+        // 2. Fast forward time
+        vm.warp(block.timestamp + LOCK_PERIOD + 1);
+
+        // 3. Multiple partial withdrawals
+        investmentManager.initiateWithdrawal(investor1, 500);
+        assertEq(
+            rwaToken.balanceOf(smartAccount),
+            1750,
+            "Incorrect balance after first withdrawal"
+        );
+
+        investmentManager.initiateWithdrawal(investor1, 750);
+        assertEq(
+            rwaToken.balanceOf(smartAccount),
+            1000,
+            "Incorrect balance after second withdrawal"
+        );
+
+        // 4. Final full withdrawal
+        investmentManager.initiateWithdrawal(investor1, 1000);
+        assertEq(
+            rwaToken.balanceOf(smartAccount),
+            0,
+            "Incorrect balance after final withdrawal"
         );
     }
 
-    function testPartialWithdrawal() public {
-        uint256 investmentAmount = 1000;
-        uint256 partialWithdrawalAmount = 400;
+    function testInvestmentTimestamps() public {
+        // 1. Initial investment
+        uint256 initialTimestamp = block.timestamp;
+        investmentManager.invest(investor1, 1000);
 
-        // Invest
+        // 2. Check investment timestamp
+        assertEq(
+            investmentManager.investmentTimestamps(investor1),
+            initialTimestamp,
+            "Incorrect investment timestamp"
+        );
+
+        // 3. Additional investment
+        vm.warp(block.timestamp + 10 days);
+        uint256 newTimestamp = block.timestamp;
+        investmentManager.invest(investor1, 500);
+
+        // 4. Check that timestamp is updated
+        assertEq(
+            investmentManager.investmentTimestamps(investor1),
+            newTimestamp,
+            "Investment timestamp not updated"
+        );
+    }
+
+    function testFailExcessiveWithdrawal() public {
+        // 1. Initial investment
+        investmentManager.invest(investor1, 1000);
+
+        // 2. Fast forward time
+        vm.warp(block.timestamp + LOCK_PERIOD + 1);
+
+        // 3. Try to withdraw more than invested (should fail)
+        vm.expectRevert("ERC20: transfer amount exceeds balance");
+        investmentManager.initiateWithdrawal(investor1, 1001);
+    }
+
+    function testRWATokenMinting() public {
+        // 1. Check initial supply
+        assertEq(rwaToken.totalSupply(), 0, "Initial supply should be 0");
+
+        // 2. Invest and check minted amount
+        uint256 investmentAmount = 1000;
         investmentManager.invest(investor1, investmentAmount);
 
-        // Fast forward time
-        vm.warp(block.timestamp + LOCK_PERIOD + 1 days);
-
-        // Partial withdrawal
-        investmentManager.initiateWithdrawal(
-            investor1,
-            partialWithdrawalAmount
+        assertEq(
+            rwaToken.totalSupply(),
+            investmentAmount,
+            "Incorrect total supply after investment"
         );
 
-        address smartAccount = accountFactory.getAccount(investor1);
+        // 3. Multiple investments and check total supply
+        investmentManager.invest(investor2, 2000);
+        investmentManager.invest(investor3, 3000);
+
         assertEq(
-            rwaToken.balanceOf(smartAccount),
-            investmentAmount - partialWithdrawalAmount,
-            "Incorrect remaining balance after partial withdrawal"
+            rwaToken.totalSupply(),
+            6000,
+            "Incorrect total supply after multiple investments"
         );
     }
 
-    // Additional helper functions can be added here for more complex scenarios
+    function testSmartAccountCreation() public {
+        // 1. Check that no account exists initially
+        address initialAccount = accountFactory.getAccount(investor1);
+        assertEq(
+            initialAccount,
+            address(0),
+            "Account should not exist initially"
+        );
+
+        // 2. Invest and check account creation
+        investmentManager.invest(investor1, 1000);
+        address createdAccount = accountFactory.getAccount(investor1);
+        assertTrue(
+            createdAccount != address(0),
+            "Account not created after investment"
+        );
+
+        // 3. Invest again and check that the same account is used
+        investmentManager.invest(investor1, 500);
+        address sameAccount = accountFactory.getAccount(investor1);
+        assertEq(
+            createdAccount,
+            sameAccount,
+            "New account created for existing investor"
+        );
+    }
 }

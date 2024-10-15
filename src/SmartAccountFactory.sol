@@ -39,6 +39,14 @@ contract SmartAccountFactory is Ownable {
         return address(newAccount);
     }
 
+    function removeAccount(address user) external {
+        require(
+            msg.sender == investmentManager,
+            "Only InvestmentManager can remove accounts"
+        );
+        delete userAccounts[user];
+    }
+
     function getAccount(address user) external view returns (address) {
         return userAccounts[user];
     }
