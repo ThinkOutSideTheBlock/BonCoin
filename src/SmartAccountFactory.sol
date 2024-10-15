@@ -28,7 +28,11 @@ contract SmartAccountFactory is Ownable {
         );
         require(userAccounts[user] == address(0), "Account already exists");
 
-        SmartAccount newAccount = new SmartAccount(user, rwaToken);
+        SmartAccount newAccount = new SmartAccount(
+            user,
+            rwaToken,
+            investmentManager
+        );
         userAccounts[user] = address(newAccount);
 
         emit AccountCreated(user, address(newAccount));

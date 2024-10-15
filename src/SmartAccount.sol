@@ -13,20 +13,19 @@ contract SmartAccount {
 
     event TokensBurned(uint256 amount);
 
-    constructor(address _owner, address _rwaToken) {
+    constructor(address _owner, address _rwaToken, address _investmentManager) {
         owner = _owner;
         rwaToken = _rwaToken;
-    }
-
-    function setInvestmentManager(address _investmentManager) external {
-        require(msg.sender == owner, "Only owner can set InvestmentManager");
         investmentManager = _investmentManager;
     }
 
     function burnTokens(address token, uint256 amount) external {
-        require(msg.sender == investmentManager, "Only InvestmentManager can burn tokens");
+        require(
+            msg.sender == investmentManager,
+            "Only InvestmentManager can burn tokens"
+        );
         require(token == rwaToken, "Can only burn RWA tokens");
-        
+
         IERC20(token).safeTransfer(address(0xdead), amount);
         emit TokensBurned(amount);
     }

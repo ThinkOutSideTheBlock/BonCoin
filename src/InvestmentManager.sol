@@ -7,9 +7,10 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./SmartAccountFactory.sol";
 import "./SmartAccount.sol";
+import "./RWAToken.sol";
 
 contract InvestmentManager is Ownable, Pausable, ReentrancyGuard {
-    IERC20 public rwaToken;
+    RWAToken public rwaToken; // Change this to RWAToken instead of IERC20
     SmartAccountFactory public accountFactory;
     uint256 public lockPeriod;
     mapping(address => uint256) public investmentTimestamps;
@@ -35,7 +36,7 @@ contract InvestmentManager is Ownable, Pausable, ReentrancyGuard {
             _rwaToken != address(0) && _accountFactory != address(0),
             "Invalid addresses"
         );
-        rwaToken = IERC20(_rwaToken);
+        rwaToken = RWAToken(_rwaToken); // Cast to RWAToken
         accountFactory = SmartAccountFactory(_accountFactory);
         lockPeriod = _lockPeriod;
     }
@@ -52,6 +53,10 @@ contract InvestmentManager is Ownable, Pausable, ReentrancyGuard {
         }
 
         uint256 tokens = calculateTokens(amount);
+
+        // Mint tokens before transferring
+        rwaToken.mint(address(this), tokens);
+
         require(
             rwaToken.transfer(smartAccount, tokens),
             "Token transfer failed"
